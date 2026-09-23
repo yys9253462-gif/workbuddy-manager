@@ -68,4 +68,8 @@ jobs:
         if: steps.sync.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run build-image.yml --ref main
+        run: |
+          # 必须显式指定 --repo：仓库里同时配了 origin(fork) 与 upstream(上游)，
+          # 不指定时 gh 会解析到上游 ithtelab/workbuddy-manager 并报 404
+          # （build-image.yml 只存在于 fork 里）。2026-09-23 修。
+          gh workflow run build-image.yml --repo "$GITHUB_REPOSITORY" --ref main
