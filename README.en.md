@@ -153,7 +153,8 @@ ideas belong in [this repository](https://github.com/ithtelab/workbuddy-manager/
 - **Inbound IP control** — global allow/deny lists with CIDR support; allowlist mode can
   restrict access to trusted sources only
 - **Full audit trail** — per call: key, IP, model, status code, **time to first token**,
-  total latency, token usage and **actual credit charged** (from upstream `usage.credit`;
+  total latency, token usage, **actual credit charged** and **prompt-cache hits**
+  (credit comes from upstream `usage.credit`;
   shown as `—` when the upstream does not report it, which is different from charging 0)
 
 ### Visual settings
@@ -291,12 +292,25 @@ ideas belong in [this repository](https://github.com/ithtelab/workbuddy-manager/
 <img src="docs/images/keys.png" alt="API keys" width="100%" />
 
 ### Request logs
-> Filter by time / key / status / model / IP, with **time to first token**, total latency and tokens
+> Filter by time / key / status / model / IP, with **the account actually used**, **time to first token**, total latency, tokens and **prompt-cache hits**
 
 "First token" = from sending the upstream request to the first delta containing content.
 It reflects **how fast the upstream starts responding**. "Total latency" includes the whole
 generation, so it grows with answer length — useful for overall cost per request.
 Non-streaming requests have no intermediate steps, so the first-token column shows `—`.
+
+**Account** is which upstream account served this call, shown as `nickname(uid8)`. The upstream
+picks it and does not return it in the response, so the panel reads the upstream's container log
+and matches entries by time — that is why it **appears a few seconds after** the request (a
+just-finished one may still show `—`). When the container log is unavailable (upstream on another
+host, no `docker.sock`, native deployment) the column stays `—`; nothing else is affected.
+
+The cache marker after the token count (green "cache N%" / amber "no cache hit") comes from the
+usage data the upstream returns; it tells you whether a repeated prefix is **actually hitting the
+cache**, which is billed much cheaper. Prefix caches are stored **per account**, so "the account
+changed" and "no cache hit" often show up together — read the two columns side by side. When the
+upstream does not return this data the marker is omitted (the detail view says "not captured") —
+that is not the same as "no cache hit".
 
 <img src="docs/images/logs.png" alt="Request logs" width="100%" />
 
@@ -910,6 +924,18 @@ release notes, and creates a Release with the archives attached.
 - **Credentials** — licensed IDC / ISP / CDN operator (B1-20263321, 苏B2-20263329)
 
 ---
+
+## Related projects
+
+- [**sanguine886/workbuddy-sdk**](https://github.com/sanguine886/workbuddy-sdk) (Go, MIT) —
+  a community-maintained Go client library covering both of this project's API surfaces:
+  the control plane `/api/*` (accounts, keys, stats, logs, security, settings, users,
+  updates) and the data plane `/v1/*` (Chat Completions / Responses / Anthropic
+  Messages / Models). Handy for Go tooling — `go get` it instead of wiring HTTP and
+  session auth by hand.
+
+> A community project with **no code dependency on this repository**; please report
+> issues to [its tracker](https://github.com/sanguine886/workbuddy-sdk/issues).
 
 ## Credits
 

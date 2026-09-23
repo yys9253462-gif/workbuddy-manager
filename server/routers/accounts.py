@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import time
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -15,6 +16,22 @@ from ..services.realm import realm_of, supports_checkin
 router = APIRouter(prefix='/api', tags=['accounts'])
 
 
+def _today_start() -> int:
+    """本地时区「今天 0 点」的 epoch 秒 —— 签到状态按**自然日**判定。
+
+    两件事都要求自然日口径：
+
+      · 腾讯侧签到就是按自然日算的（重复签到时它回 10001「今日已签到」）；
+      · 界面要回答的是「今天签没签」，不是「最近 24 小时签没签」。
+
+    为什么用本地时间而不是 UTC：容器 TZ=Asia/Shanghai（见 docker-compose.yml），
+    这里若按 UTC 取当天 0 点，中国时间每天 08:00 之前会被算成「昨天」——
+    表现为早上刚签完，界面又说没签。
+    """
+    now = datetime.datetime.now()
+    return int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+
+
 @router.get('/accounts')
 async def list_accounts(user: dict = Depends(security.current_user)) -> dict:
     """账号列表：本地授权信息 + 上游运行时状态（含积分余额）。
@@ -25,6 +42,19 @@ async def list_accounts(user: dict = Depends(security.current_user)) -> dict:
     accounts = wb2api.list_auth_accounts()
     status = await wb2api.get_status()
     wb2api.merge_pool_status(accounts, status)
+    # 备注随列表一次带回（issue #67）：按 uid 取，没有备注的账号给空串而不是缺字段
+    # —— 前端两处视图（手机卡片 / 桌面表格）都直接读它，缺字段会多一处判空。
+    notes = db.account_notes()
+    # 今日签到状态随列表一次带回（和备注同一个理由：两处视图都直接读它）。
+    # 数据源是本端签到记录 —— 腾讯对「今天已签过」回 10001 且我们照记，
+    # 所以「本端签过」与「今天已签到」在这里是同一件事。上游自动签到不产
+    # 逐账号记录（它只打一行汇总），所以首次进入面板时可能显示未签到，
+    # 手动点一次拿到 10001 后就归位了 —— 这一点在界面上如实说明。
+    done_today = db.checkin_done_since(_today_start())
+    for a in accounts:
+        uid = str(a.get('uid') or '')
+        a['note'] = notes.get(uid, '')
+        a['checkin_today'] = done_today.get(uid)
     synced = sum(1 for a in accounts if a.get('credits') is not None)
     return {
         'total': len(accounts),
@@ -300,6 +330,21 @@ async def account_checkin(filename: str, user: dict = Depends(security.require_a
         db.add_checkin_log(uid, nickname, 'manual', False, None, '该账号无有效 accessToken')
         return {'code': -1, 'message': '该账号无有效 accessToken'}
 
+    # 今天已经签过就不再打上游：腾讯对重复签到回 10001（幂等成功，不是错误），
+    # 但每点一次都是一次真实 RPC，而且会在签到记录里堆出一串「今日已签到」，
+    # 把真正的失败记录挤出视线（线上实测：同一个账号一天被记了 11 条）。
+    # 这里就地返回、不写日志，让「签到记录」保持「每次实际动作一条」。
+    done_at = db.checkin_done_since(_today_start()).get(uid)
+    if done_at is not None:
+        return {
+            'code': 10001,
+            'already': True,
+            'message': '今日已签到，无需重复',
+            'checkin_today': done_at,
+            'credits': None,
+            'expiries': [],
+        }
+
     # 传完整 auth dict：billing 域要带 X-User-Id 等身份头（对齐上游 BillingHeaders）
     code, message = await tencent.checkin({
         'access_token': token,
@@ -328,6 +373,9 @@ async def account_checkin(filename: str, user: dict = Depends(security.require_a
     return {
         'code': code,
         'message': message,
+        # 10001 = 腾讯说「今天已签过」：这也是成功，但和「本次刚签上」在提示语上
+        # 要分开说 —— 否则用户会以为自己的点击真的又签了一次。
+        'already': code == 10001,
         'credits': credits,
         'expiries': expiries,
     }
@@ -442,6 +490,7 @@ async def checkin_all(user: dict = Depends(security.require_admin)) -> dict:
     后端却还在跑，用户容易重复点击。并发后总耗时约等于最慢的单个账号。
     """
     accounts = wb2api.list_auth_accounts()
+    done_today = db.checkin_done_since(_today_start())
     sem = _checkin_semaphore()
 
     async def one(acc: dict) -> dict:
@@ -466,7 +515,15 @@ async def checkin_all(user: dict = Depends(security.require_admin)) -> dict:
         if not supports_checkin(realm_of(auth)):
             msg = '国际版无签到体系，已跳过'
             db.add_checkin_log(uid, nickname, 'manual-batch', False, -2, msg)
-            return {'nickname': nickname, 'ok': False, 'code': -2, 'message': msg}
+            return {'nickname': nickname, 'ok': False, 'skipped': True,
+                    'code': -2, 'message': msg}
+
+        # 今日已签到：跳过（理由同单账号签到 —— 重复点是白打的 RPC，
+        # 还会在签到记录里堆出一串「今日已签到」把失败记录挤下去）。
+        # 结果里照报，界面才能显示「N 个今日已签到」而不是让它们凭空消失。
+        if uid and uid in done_today:
+            return {'nickname': nickname, 'ok': True, 'already': True,
+                    'code': 10001, 'message': '今日已签到，已跳过'}
 
         async with sem:
             # 传完整 auth dict：billing 域要带 X-User-Id 等身份头
@@ -483,8 +540,24 @@ async def checkin_all(user: dict = Depends(security.require_admin)) -> dict:
         return {'nickname': nickname, 'ok': ok, 'code': code, 'message': message}
 
     results = await asyncio.gather(*(one(a) for a in accounts)) if accounts else []
-    succeeded = sum(1 for r in results if r['ok'])
-    return {'total': len(results), 'succeeded': succeeded, 'results': list(results)}
+    # 两类账号都不进 `total` 分母，各自单独报数：
+    #   · skipped：国际版没有签到体系，既不会成功也不是失败。算进 total 会显示成
+    #     「5/6 成功」，用户以为漏签了一个号、反复去点——而它永远是「已跳过」。
+    #   · already：今日已签到，本次压根没打上游。算进 total 会把「无需重复」说成
+    #     「刚签成功」，用户会以为这次点击真的又签了一次。
+    # 于是 total 的含义收敛成「本次真正发起并需要结果的账号数」，
+    # succeeded 自然就是「这次真签上了几个」。
+    applicable = [r for r in results if not r.get('skipped')]
+    already = [r for r in applicable if r.get('already')]
+    attempted = [r for r in applicable if not r.get('already')]
+    succeeded = sum(1 for r in attempted if r['ok'])
+    return {
+        'total': len(attempted),
+        'succeeded': succeeded,
+        'already': len(already),
+        'skipped': len(results) - len(applicable),
+        'results': list(results),
+    }
 
 
 @router.get('/checkin-logs')
@@ -922,10 +995,14 @@ async def account_refresh(filename: str, user: dict = Depends(security.require_a
         return {'ok': False,
                 'message': f'{message}，但写入账号文件失败：{exc}（有效期未保存）'}
 
-    reloaded = await reload.restart_now()
+    # restart_now() 返回 (ok, message) 二元组，必须解包：直接当布尔用会因为
+    # 非空元组恒为真，从而在重载失败时仍报「已重载生效」（且 reload_triggered
+    # 会变成数组、与前端声明的 boolean 不符）。
+    reloaded, reload_error = await reload.restart_now()
     return {
         'ok': True,
-        'message': message + ('，上游已重载生效' if reloaded else '；请手动重启上游以生效'),
+        'message': message + ('，上游已重载生效' if reloaded
+                              else f'；上游重载失败：{reload_error}，请在宿主机重启上游容器'),
         'reload_triggered': reloaded,
         'expires_at': fields.get('expires_at'),
     }
@@ -952,6 +1029,44 @@ async def account_clear_cooling(
 
     ok, message, detail = await wb2api.force_clear_account_cooling(uid)
     return {'ok': ok, 'message': message, **(detail or {})}
+
+
+@router.put('/accounts/{filename}/note')
+async def account_set_note(
+    filename: str,
+    body: dict = Body(...),
+    user: dict = Depends(security.require_admin),
+) -> dict:
+    """给账号写一句备注（issue #67）——比如「张叔叔」「备用号」「给小李用的」。
+
+    为什么需要：用手机号邀请注册的账号，昵称往往认不出是谁，删号时不知道该删哪个。
+
+    存法见 `db.account_notes` 的注释：**按 uid** 存在本端库里（不写进上游的账号
+    文件——那是上游按自己 schema 读写的文件，塞自定义字段会被它覆盖或超出 schema）。
+    uid 是账号的稳定标识，所以临时停用（改文件名）不会让备注丢。
+
+    空串 = 删除备注（不留空行）。
+    """
+    try:
+        raw = wb2api.read_account_file_any(filename)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail='账号文件不存在') from exc
+    uid = str((raw.get('account') or {}).get('uid') or '').strip()
+    if not uid:
+        raise HTTPException(status_code=400, detail='该账号文件缺少 uid，无法保存备注')
+
+    # 先把**所有空白收起成单个空格**（审查补）：备注在列表里是单行展示 + 悬停看
+    # 全文，粘进来的多行文本（或中间一串空格）会让它看起来像坏数据；顺带把
+    # 「只有换行/空格」的输入归成空串 = 清除。
+    #
+    # 截断而不是拒绝：备注是给人看的短文本，粘多了不该报错丢掉整句。
+    # 上限取 100 字符（界面上也是这个 maxLength），够写清是谁/做什么用。
+    note = ' '.join(str(body.get('note') or '').split())[:100]
+    if note:
+        db.set_account_note(uid, note)
+    else:
+        db.delete_account_note(uid)
+    return {'ok': True, 'uid': uid, 'note': note}
 
 
 @router.delete('/accounts/{filename}')

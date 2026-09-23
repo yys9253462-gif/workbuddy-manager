@@ -183,7 +183,8 @@
     "creditsExpiry": "最近一笔 {amount} 积分将于 {time} 到期",
     "failedRequests": "失败请求",
     "todayFailed": "今天 {n} 次失败",
-    "weekFailed": "近 7 天 {n} 次失败 · {realm}"
+    "weekFailed": "近 7 天 {n} 次失败 · {realm}",
+    "creditsExpiryDaily": "最近一天（{time}）共 {amount} 积分到期"
   },
   "stats": {
     "title": "用量统计",
@@ -266,6 +267,28 @@
     "checkinAllDoneDetail": "{ok}/{total} 个账号成功",
     "checkinPartial": "签到完成，{failed} 个失败",
     "checkinPartialDetail": "{ok}/{total} 个账号成功，详见「任务记录」页",
+    "noteLabel": "备注：",
+    "noteAdd": "添加备注",
+    "noteEditTitle": "编辑备注",
+    "noteTitle": "账号备注",
+    "noteDesc": "给「{name}」写一句只有你看得懂的备注，例如「张叔叔」「备用号」。留空保存即清除。",
+    "notePlaceholder": "例如：张叔叔（高中同学）",
+    "noteSaved": "备注已保存",
+    "noteCleared": "备注已清除",
+    "checkinSkippedNote": "（另有 {skipped} 个账号不适用：国际版无签到体系）",
+    "checkinDoneTitle": "今日已签到（{at}），无需重复",
+    "checkinAlreadyNote": "（{n} 个账号今日已签到，已跳过）",
+    "checkinNothingPending": "今日都已签到",
+    "checkinNothingPendingDetail": "{n} 个账号今天已经签过，明天再来",
+    "checkinAllNone": "今日已签",
+    "checkinAllNoneTitle": "今天所有可签到的账号都已签到",
+    "checkinAllTitle": "还有 {n} 个账号今天没签到",
+    "taskRun": "活动任务（对这个账号执行成长任务）",
+    "taskRunTitle": "活动任务",
+    "taskRunFor": "对「{name}」执行成长任务",
+    "taskRunDesc": "与「任务」页的一键执行是同一套脚本，区别是只跑这一个账号。建议先「预览」看清能领到什么，再决定领奖还是点亮。",
+    "taskRunBusyOther": "当前正在执行的是「{target}」——同一时刻只允许一个任务，请等它结束。",
+    "taskRunAllAccounts": "全部账号",
     "restarted": "已重启上游",
     "disabledReason": "禁用原因：{reason}",
     "badgeDisabled": "● 已禁用",
@@ -409,6 +432,12 @@
     "modelsUnknown": "这些名字找不到对应模型（可能拼错了）：{names}。它们不会被列出，调用时也会被拒。"
   },
   "logs": {
+    "cacheShort": "缓存 {pct}%",
+    "cacheMissShort": "未命中",
+    "cacheTitle": "提示词缓存：命中 {hit} / 未命中 {miss} token",
+    "rowCacheHit": "缓存命中 Token",
+    "rowCacheMiss": "缓存未命中 Token",
+    "rowCacheWrite": "缓存写入 Token",
     "title": "请求日志",
     "description": "反代网关的每一次调用记录，含状态、延迟与 Token 计量（每 60 秒自动刷新；含国内版与国际版调用，不按版本过滤）",
     "clearTitle": "清空所有日志？",
@@ -422,6 +451,8 @@
     "filter": "筛选",
     "colTime": "时间",
     "colFirstToken": "首字",
+    "colAccount": "账号",
+    "rowAccount": "账号",
     "colLatency": "总耗时",
     "streamShort": "流",
     "noCreditTitle": "上游未返回该项（不等于免费）",
@@ -976,6 +1007,10 @@
     "errDuration": "格式如 30s / 10m / 2h / 1d",
     "errNoNewline": "不能包含换行或控制字符",
     "errHourFormat": "时刻格式有误",
-    "errEnum": "取值不在允许范围内"
+    "errEnum": "取值不在允许范围内",
+    "displayTitle": "界面",
+    "displayDesc": "这一组只影响**本浏览器**的显示方式，不改变系统行为，改完立即生效。",
+    "expiryDailyLabel": "到期积分按天模糊统计",
+    "expiryDailyDesc": "开启后，仪表盘的到期积分按**天**归并：同一天到期的多笔合并显示总和，而不是只显示最近那一笔。悬停仍能看到每一笔的金额与日期。"
   }
 }
