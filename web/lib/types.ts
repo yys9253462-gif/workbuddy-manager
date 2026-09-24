@@ -286,10 +286,45 @@ export interface ApiKey {
    */
   quota_credit: number;
   used_credit: number;
+  /**
+   * 来源红包的 id；null = 手工建的。
+   *
+   * 密钥列表按它分成两个 tab：红包一次生成一批、额度零碎，与手工建的混在
+   * 一起很难看（也从没人会去逐把编辑红包发出去的密钥）。
+   */
+  packet_id: number | null;
   created_at: number;
   last_used_at: number | null;
   /** 仅在创建时返回一次 */
   key?: string;
+}
+
+/**
+ * 管理面**作用域化 API Token**（见 docs/api-tokens.md）。
+ *
+ * 与上面那把网关密钥（`ApiKey`）是**两套东西**：`ApiKey` 只授权模型调用；
+ * 本类型授权的是管理接口 `/api/*`，供脚本 / CI 免登录调用。
+ */
+export interface ApiToken {
+  id: number;
+  name: string;
+  /** 明文前 12 字符，用于展示与识别（明文本身不会再回传） */
+  prefix: string;
+  /** 权限：只读 / 管理员（角色由它决定） */
+  scope: 'readonly' | 'admin';
+  enabled: boolean;
+  /** 到期时刻（epoch 秒）；null = 永不过期 */
+  expires_at: number | null;
+  created_at: number;
+  /** 创建者用户名（审计用） */
+  created_by: string;
+  last_used_at: number | null;
+  last_used_ip: string | null;
+}
+
+/** 创建令牌的返回：比 ApiToken 多一个**仅此一次**的明文字段。 */
+export interface CreatedApiToken extends ApiToken {
+  token: string;
 }
 
 export interface RequestLog {
@@ -813,4 +848,111 @@ export interface UpstreamStats {
   uptime_sec?: number;
   total?: UpstreamStatRow;
   models?: UpstreamStatRow[];
+}
+
+/* ── 红包：一次建一批带额度的密钥，管理员自己分发 ──────────
+ * 见 server/redpacket.py 的模块说明（为什么不做领取页/分享码）。 */
+
+/**
+ * 额度类别。两者**限制的对象不同**，不只是单位不同：
+ * credit 限制上游返回的真实扣费（口径准）；token 限制 token 总数（直观）。
+ */
+export type RedPacketKind = 'credit' | 'token';
+
+/** 分配方式：lucky = 拼手气（有人多有人少），even = 均分 */
+export type RedPacketMode = 'lucky' | 'even';
+
+export interface RedPacket {
+  id: number;
+  title: string;
+  quota_kind: RedPacketKind;
+  total_amount: number;
+  shares: number;
+  mode: RedPacketMode;
+  /**
+   * 限定的模型范围。**token 红包非空、积分红包恒为空**（两类规则相反，见
+   * server/redpacket.py 的 validate）：token 是「量」与模型强相关，
+   * 积分是「钱」任何模型都能用。
+   */
+  models: string[];
+  /**
+   * 抽奖码 —— 拼出分享链接用。**它是凭据**：拿到就能抽走一份，
+   * 所以只在管理端接口下发，不要贴到公开场合。
+   */
+  code: string;
+  created_by: string;
+  created_at: number;
+  expires_at: number;
+  /** 已被抽走的份数（抽奖式红包看的就是这个进度） */
+  claimed: number;
+  /** 整批都已停用 = 已收回（部分停用不算，那种情况去密钥页看单把） */
+  revoked: boolean;
+}
+
+/** 红包里的一份（= 一个密钥）。**不含明文** —— 库里只有哈希。 */
+export interface RedPacketItem {
+  key_id: number;
+  prefix: string;
+  amount: number;
+  enabled: boolean;
+  used_tokens: number;
+  used_credit: number;
+}
+
+export interface RedPacketDetail extends RedPacket {
+  items: RedPacketItem[];
+}
+
+/**
+ * 创建红包的结果：含**明文 key**，且**仅此一次**（与 keyApi.create 同理）。
+ *
+ * 界面上必须提示「离开后无法再看到」并提供复制/导出 —— 这是「直接发 key」
+ * 方案的固有代价，不是缺陷。
+ */
+/** 抽奖页的元信息。**不含密钥** —— 没点「开启」之前不该能拿到。 */
+export interface ClaimInfo {
+  title: string;
+  quota_kind: RedPacketKind;
+  shares: number;
+  /** 还剩几份 */
+  left: number;
+  models: string[];
+  expires_at: number;
+  expired: boolean;
+  /** 本机（IP）是不是已经抽过了 */
+  claimed: boolean;
+  /**
+   * 本机领到的那一份（没领过时为 null）。
+   *
+   * 第二次打开时会**直接展示**：关掉弹窗才想起没存密钥是很常见的，而明文
+   * 只显示那一次 —— 刷新就能找回来，比「请联系发红包的人」有用。
+   * 代价是同一 NAT 出口下的人能看到彼此的那份（红包的熟人场景下可接受）。
+   */
+  my_amount: number | null;
+  my_key: string | null;
+}
+
+/** 抽到的那一份。`key` 是**明文**，只在抽的这一刻返回。 */
+export interface DrawResult {
+  amount: number;
+  quota_kind: RedPacketKind;
+  models: string[];
+  key: string;
+  expires_at: number;
+}
+
+export interface CreatedRedPacket {
+  id: number;
+  title: string;
+  quota_kind: RedPacketKind;
+  total_amount: number;
+  shares: number;
+  mode: RedPacketMode;
+  /** 同上：token 红包非空、积分红包恒为空 */
+  models: string[];
+  /** 抽奖码 —— 拼分享链接用（仅此一次能拿到，之后详情接口还会给） */
+  code: string;
+  created_at: number;
+  expires_at: number;
+  keys: ApiKey[];
 }

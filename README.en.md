@@ -8,10 +8,9 @@ A web frontend for [`workbuddy2api`](https://github.com/Sliverkiss/workbuddy2api
 bulk account onboarding via QR code, automatic daily check-in, API key distribution,
 IP access control, request logs and usage stats — all in one panel.
 
-> The upstream repository has been unavailable since 2026-09-23 (deleted by its
-> author); this project continues under the upstream MIT licence. Existing
-> deployments are unaffected — for reinstall/migration, see the
-> [deployment guide](deploy/README.md#〇上游仓库已不可访问2026-09-23-起).
+> The upstream workbuddy2api source **ships inside this project's release package**
+> (MIT). Existing deployments are unaffected — for reinstall/migration, see the
+> [deployment guide](deploy/README.md#〇上游源码从哪来随发布包分发).
 
 ![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
@@ -584,9 +583,9 @@ Two other differences from a host install (both surfaced in the UI):
 ### 4. Server deployment (one-click script)
 
 This project depends on the upstream workbuddy2api (account pool and OpenAI-compatible
-API) — **cloning this repo alone will not run**. Point `UPSTREAM_SRC` at a local copy
-(directory or archive): the original repository is gone, see the
-[deployment guide](deploy/README.md#〇上游仓库已不可访问2026-09-23-起).
+API) — **cloning this repo alone will not run**. The release package **ships the upstream source**, so the script installs both.
+To use your own copy instead, see the
+[deployment guide](deploy/README.md#〇上游源码从哪来随发布包分发).
 A one-click script installs both on a clean machine:
 
 ```bash
@@ -794,7 +793,8 @@ Check Settings → Available models for the live list. Commonly (all with a 1310
 | `POST` | `/api/auth/start` `/api/auth/poll` | admin | QR authorisation flow |
 | `POST` | `/api/accounts/{file}/checkin` `/test` `/refresh` | admin | Check-in / probe / refresh |
 | `DELETE` | `/api/accounts/{file}` | admin | Delete an account |
-| `GET/POST/PATCH/DELETE` | `/api/keys[/{id}]` | session / admin | Key management |
+| `GET/POST/PATCH/DELETE` | `/api/keys[/{id}]` | session / admin | Key management (handed to downstream callers) |
+| `GET/POST/PATCH/DELETE` | `/api/tokens[/{id}]` | session (admin) | Admin API tokens (for scripts / CI, see [docs/api-tokens.md](docs/api-tokens.md)) |
 | `GET` | `/api/logs` `/api/stats/*` | session | Logs and usage |
 | `GET/POST/DELETE` | `/api/security/*` | session / admin | IP rules and audit |
 | `GET/POST` | `/api/settings/*` | session / admin | Upstream config, model mapping |
@@ -843,6 +843,11 @@ workbuddy-manager/
   and login lockout cannot be spoofed
 - Failed logins are locked **per IP and per username**, blocking both single-host and
   distributed brute force
+- The admin API supports **scoped API tokens** (read-only / admin, revocable, expiring;
+  only a hash is stored and every use is auditable) so scripts / CI can call it without
+  logging in. **High-risk endpoints and token management itself accept sessions only**,
+  so a leaked token cannot escalate privileges or persist itself
+  (see [docs/api-tokens.md](docs/api-tokens.md))
 - `/docs` and `/openapi.json` are disabled in production (`WB_ENABLE_DOCS=1` to enable)
 - The gateway limits request body size (8 MiB) and per-key request rate (120/min by default)
 - Security headers (CSP, `X-Frame-Options`, `X-Content-Type-Options`, …) are set
@@ -895,8 +900,8 @@ workbuddy-manager/
 
 > Please include the version and error logs, and **remove any keys or tokens first**.
 > For issues with the upstream workbuddy2api itself, use
-> [this repository](https://github.com/ithtelab/workbuddy-manager/issues) — the original
-> upstream repo is gone, and its source is now maintained here.
+> [this repository](https://github.com/ithtelab/workbuddy-manager/issues) — the upstream
+> source ships with our releases.
 
 ### Release process
 
@@ -951,8 +956,8 @@ release notes, and creates a Release with the archives attached.
 - [**linux-do/cdk**](https://github.com/linux-do/cdk) (MIT) — design tokens and floating
   dock component; this project's UI follows its visual language
 - [**Sliverkiss/workbuddy2api**](https://github.com/Sliverkiss/workbuddy2api) — the account
-  pool and OpenAI-compatible proxy underneath (MIT; its repository became unavailable
-  on 2026-09-23, and this project continues maintaining the source)
+  pool and OpenAI-compatible proxy underneath (MIT; its source is distributed with
+  this project's releases)
 - [**lbjlaq/Antigravity-Manager**](https://github.com/lbjlaq/Antigravity-Manager) — feature
   reference for the console
 

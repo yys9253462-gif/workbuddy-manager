@@ -7,9 +7,9 @@
 一套给 [`workbuddy2api`](https://github.com/Sliverkiss/workbuddy2api) 配套的 Web 管理端：
 扫码批量纳管账号、自动签到、密钥分发、IP 管控、调用日志与用量统计，一个面板全搞定。
 
-> 上游仓库自 2026-09-23 起已不可访问（作者删库，本项目按 MIT 继续运营）。
-> 已部署的不受影响；重装 / 迁移时怎么取得上游源码，见
-> [部署指南的开头一节](deploy/README.md#〇上游仓库已不可访问2026-09-23-起)。
+> 上游 workbuddy2api 的源码**随本项目的发布包一起分发**（MIT）。
+> 已部署的不受影响；重装 / 迁移时怎么取得源码，见
+> [部署指南的开头一节](deploy/README.md#〇上游源码从哪来随发布包分发)。
 
 ![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
@@ -36,7 +36,7 @@
 
 ## 这是什么
 
-`workbuddy2api` 是一个把腾讯 CodeBuddy 账号池包装成 OpenAI 兼容接口的反代服务（Go 编写，原仓库已被作者删除）。它的能力很完整，但只有命令行：加账号要跑脚本、看状态要 `curl /status`、发密钥没有界面。
+`workbuddy2api` 是一个把腾讯 CodeBuddy 账号池包装成 OpenAI 兼容接口的反代服务（Go 编写）。它的能力很完整，但只有命令行：加账号要跑脚本、看状态要 `curl /status`、发密钥没有界面。
 
 本项目补上这一块 —— 一个可以公网运营的 Web 控制台：
 
@@ -62,7 +62,7 @@
 
 欢迎参与共建：面板与上游源码的问题、想法都提到
 [本仓库](https://github.com/ithtelab/workbuddy-manager/issues)
-（上游原仓库已不可访问，相关源码现由本项目继续维护）。
+（上游源码随本项目的发布包分发）。
 
 ---
 
@@ -494,8 +494,9 @@ docker pull ghcr.io/<你的用户名>/workbuddy-manager-multiarch:latest
 ### 四、部署到服务器（一键脚本）
 
 本项目依赖上游 workbuddy2api（账号池与 OpenAI 兼容接口），**单独 clone 本仓库无法运行**。
-上游源码用 `UPSTREAM_SRC` 指定（本地目录或压缩包）——原仓库已不可访问，
-详见[部署指南](deploy/README.md#〇上游仓库已不可访问2026-09-23-起)。一键脚本会装好两者：
+**发布包里已自带上游源码**（源码由本项目随包分发），
+一键脚本会装好两者；要改用自己那份源码见
+[部署指南](deploy/README.md#〇上游源码从哪来随发布包分发)：
 
 ```bash
 # 推荐：用 Release 包（内含已构建的前端，无需 Node.js）
@@ -708,7 +709,8 @@ export ANTHROPIC_MODEL=glm-5.2
 | `POST` | `/api/auth/start` `/api/auth/poll` | 管理员 | 扫码授权流程 |
 | `POST` | `/api/accounts/{file}/checkin` `/test` `/refresh` | 管理员 | 签到 / 测活 / 刷新 |
 | `DELETE` | `/api/accounts/{file}` | 管理员 | 删除账号 |
-| `GET/POST/PATCH/DELETE` | `/api/keys[/{id}]` | 会话 / 管理员 | 密钥管理 |
+| `GET/POST/PATCH/DELETE` | `/api/keys[/{id}]` | 会话 / 管理员 | 密钥管理（发给下游调模型） |
+| `GET/POST/PATCH/DELETE` | `/api/tokens[/{id}]` | 会话（管理员） | 管理面 API Token（给脚本 / CI，见 [docs/api-tokens.md](docs/api-tokens.md)） |
 | `GET` | `/api/logs` `/api/stats/*` | 会话 | 日志与用量 |
 | `GET/POST/DELETE` | `/api/security/*` | 会话 / 管理员 | IP 规则与审计 |
 | `GET/POST` | `/api/settings/*` | 会话 / 管理员 | 上游配置、模型映射 |
@@ -755,6 +757,9 @@ workbuddy-manager/
 - **真实 IP 取自反代覆盖写入的 `X-Real-IP`**（`X-Forwarded-For` 首段可伪造），
   避免 IP 白/黑名单、每密钥 IP 限制与登录锁定被冒充绕过
 - 登录失败**按 IP + 用户名双维度锁定**，防单机与换 IP 的分布式爆破
+- 管理面支持**作用域化 API Token**（只读 / 管理员，可吊销、可过期，库中仅存哈希、
+  全程审计），供脚本 / CI 免登录调用；**高危接口与令牌管理本身只接受会话登录**，
+  令牌泄露也无法提权或自助持久化（见 [docs/api-tokens.md](docs/api-tokens.md)）
 - 生产环境默认关闭 `/docs`、`/openapi.json`（`WB_ENABLE_DOCS=1` 开启）
 - 网关限制请求体大小（8 MiB）与每密钥调用频率（默认 120 次/分钟）
 - 已配置 CSP、`X-Frame-Options`、`X-Content-Type-Options` 等安全响应头
@@ -799,7 +804,7 @@ workbuddy-manager/
 
 > 反馈时请附上版本号与错误日志，并**先移除其中的密钥、Token 等敏感信息**。
 > 上游 workbuddy2api 自身的问题也提到[本仓库](https://github.com/ithtelab/workbuddy-manager/issues)
-> ——原仓库已不可访问，源码由本项目继续维护。
+> ——上游源码随本项目的发布包分发。
 
 ### 版本发布流程
 
@@ -848,7 +853,7 @@ CI 会构建前端、打包产物、从 CHANGELOG 提取对应版本段落作为
 
 - [**LINUX DO**](https://linux.do) —— 本项目的发布与交流社区
 - [**linux-do/cdk**](https://github.com/linux-do/cdk)（MIT）—— 界面设计令牌与浮动底栏组件来源，本项目 UI 视觉与其保持一致
-- [**Sliverkiss/workbuddy2api**](https://github.com/Sliverkiss/workbuddy2api) —— 底层账号池与 OpenAI 兼容代理（MIT；原仓库已于 2026-09-23 不可访问，本项目继续维护其源码）
+- [**Sliverkiss/workbuddy2api**](https://github.com/Sliverkiss/workbuddy2api) —— 底层账号池与 OpenAI 兼容代理（MIT；源码随本项目的发布包分发，版权归原作者）
 - [**lbjlaq/Antigravity-Manager**](https://github.com/lbjlaq/Antigravity-Manager) —— 管理端功能形态参考
 
 ## License
