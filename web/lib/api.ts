@@ -1,8 +1,9 @@
 import axios, {AxiosError} from 'axios';
 import {BASE_PATH} from './base-path';
-import {tp} from './i18n';
+import {t, tp} from './i18n';
 import type {Realm} from './realm-context';
 import type {
+  UpstreamEndpoint,
   Account,
   CheckinLogPage,
   CreditExpiry,
@@ -20,6 +21,10 @@ import type {
   CreatedApiToken,
   IpAccessLog,
   IpRule,
+  KeyExportResult,
+  KeyImportDetectResult,
+  KeyImportResult,
+  KeyImportStatus,
   Me,
   AuditLogPage,
   ModelCatalog,
@@ -58,12 +63,25 @@ export const http = axios.create({
  * 后端的报错是中文（服务端不做多语言，见 README 的多语言说明），这里过一遍
  * 短语表：命中已收录的后端文案就换成当前语言，没收录的原样展示——既不需要
  * 后端改造，也不会因为漏收录而显示成键名或空白。
+ *
+ * 403 **不做统一改写**。这个状态码在本项目里有四种互不相干的含义：角色不够
+ * （`require_admin`）、接口只收会话不收 API Token（`require_session_admin`）、
+ * 本机导入的开关没开、以及调用方不是面板所在的机器。后两种的原文是**可照做的
+ * 操作说明**（去哪儿开开关、改用「导出配置」），一律改写成「权限不足」会把
+ * 用户唯一能照着做的那句话抹掉。所以只要后端给了文案，就永远优先用它。
+ *
+ * 兜底只在后端**没给**文案时生效。那种情况下原本会露出 axios 自己的英文
+ * message（"Request failed with status code 403"）——界面明明是多语言的，
+ * 偏偏在这条路径上漏出英文，而且对用户没有任何指导意义。
  */
 export function errText(e: unknown): string {
   const ax = e as AxiosError<{detail?: string; error?: string}>;
   const d = ax?.response?.data;
-  const raw = (typeof d === 'string' ? d : d?.detail || d?.error) || ax?.message || '';
-  return raw ? tp(raw) : tp('请求失败');
+  const raw = (typeof d === 'string' ? d : d?.detail || d?.error) || '';
+  if (raw) return tp(raw);
+  if (ax?.response?.status === 403) return t('error.forbidden');
+  const fallback = ax?.message || '';
+  return fallback ? tp(fallback) : tp('请求失败');
 }
 
 http.interceptors.response.use(
@@ -246,6 +264,30 @@ export const playgroundApi = {
 };
 
 /* ── API 密钥 ───────────────────────────────────────── */
+/* ── 多上游（账号池分组，见 server/upstreamsvc.py）────
+ * 密钥绑定上游后，它的请求只走那个上游的账号池；未绑定 = 默认上游。
+ * 写接口是**会话管理员**专属（带着上游 api_key，属配置级凭据）。
+ *
+ * 注意 `UpstreamWrite` 与 `UpstreamEndpoint` 是**两套形状**：`api_key` 只在请求里
+ * 出现（响应只回脱敏值与 has_key，见 routers/upstreams.py 的 _serialize）。 */
+export type UpstreamWrite = {
+  name: string;
+  base_url: string;
+  api_key?: string;
+  note?: string;
+  enabled?: boolean;
+};
+
+export const upstreamsApi = {
+  list: () => get<{items: UpstreamEndpoint[]}>('/api/upstreams'),
+  create: (body: UpstreamWrite) => post<UpstreamEndpoint>('/api/upstreams', body),
+  update: (id: number, body: Partial<UpstreamWrite>) =>
+    patch<UpstreamEndpoint>(`/api/upstreams/${id}`, body),
+  remove: (id: number) => del<{ok: boolean}>(`/api/upstreams/${id}`),
+  /** 探测该上游是否可达（走它的 /healthz）；失败原因原样返回给界面。 */
+  probe: (id: number) => post<{ok: boolean; message: string}>(`/api/upstreams/${id}/probe`),
+};
+
 export const keyApi = {
   list: () => get<ApiKey[]>('/api/keys'),
   create: (body: Partial<ApiKey>) => post<ApiKey>('/api/keys', body),
@@ -262,6 +304,74 @@ export const keyApi = {
   checkModels: (models: string[], realm: string) =>
     post<{checked: boolean; unknown: string[]; reason?: string}>(
       '/api/keys/check-models', {models, realm}),
+  /**
+   * 把一把**刚创建**的密钥导出为客户端配置片段（cc-switch / ZCode）。
+   *
+   * 必须传明文 `token`：面板只存哈希，库里拿不回明文——这个端点的存在前提
+   * 就是「调用方此刻手里有明文」。因此它只在一次性展示弹窗里被调用，
+   * 密钥列表那行（只有 prefix）导不出来。
+   */
+  exportConfig: (body: {
+    client: 'ccswitch' | 'zcode';
+    token: string;
+    app?: 'claude' | 'codex';
+    baseUrl?: string;
+    providerName?: string;
+    models?: string[];
+    defaultModel?: string;
+  }) => post<KeyExportResult>('/api/keys/export', body),
+  /**
+   * 本机导入的可用状态（**只读探测**，不写任何东西）。
+   *
+   * 要看三件事：面板侧开关是否打开、这次请求是否来自面板所在机器、目标
+   * 客户端是否已安装且未在运行。三者齐了才谈得上「一键导入」——界面据此
+   * 提前把不能用的原因说清楚，用户就不会点完才知道不行。
+   *
+   * 开关关着时返回 200 + `enabled: false`（报错会被当成故障，而这里只是
+   * 一个默认关闭的可选特性）。
+   */
+  importLocalStatus: () => get<KeyImportStatus>('/api/keys/import-local/status'),
+  /**
+   * 把刚创建的密钥**直接写进本机**的 cc-switch / ZCode 配置（真一键）。
+   *
+   * 与 `exportConfig` 同一份参数、同一份配置生成逻辑，区别只在去向：导出把
+   * 片段交给用户，导入替用户落盘。返回体里**没有密钥**。
+   *
+   * 可预期的失败都有明确状态码，`errText` 能直接取到可照做的说明：
+   * 403 = 开关没开或不是本机访问；404 = 本机没装该客户端；
+   * 409 = 客户端正在运行（或探测不到），退出客户端后可重试。
+   */
+  importLocal: (body: {
+    client: 'ccswitch' | 'zcode';
+    token: string;
+    app?: 'claude' | 'codex';
+    baseUrl?: string;
+    providerName?: string;
+    models?: string[];
+    defaultModel?: string;
+    /** 是否把导入的供应商设为当前（cc-switch 置 is_current；ZCode 移到最前） */
+    setCurrent?: boolean;
+    /**
+     * 导入方式。`auto`（默认）= 能走客户端官方深链就走深链；
+     * `deeplink` / `direct` 是给它兜底和排障用的强制值。
+     */
+    mode?: 'auto' | 'deeplink' | 'direct';
+    /**
+     * 直写方式下，客户端正在运行就替用户关掉、写完再拉起来。
+     * 关掉前会先确认定位得到它的可执行文件——关掉却拉不起来比不改更糟。
+     */
+    closeRunning?: boolean;
+  }) => post<KeyImportResult>('/api/keys/import-local', body),
+  /**
+   * 自动检测客户端装在哪（「自动检测」按钮）。
+   *
+   * 为什么需要：安装路径因机器而异——绿色版可能解压在 `E:\cc swich\`，安装版在
+   * `%LOCALAPPDATA%\Programs\…`。检测顺序是"可信度从高到低"：环境变量 →
+   * 运行中的进程 → 注册表里的协议处理器 → 上次结果 → 常见安装位 → 受限扫描。
+   * 命中后会缓存在面板数据目录，之后不用再扫。**只读**，不写用户配置。
+   */
+  importLocalDetect: (client: 'ccswitch' | 'zcode' = 'ccswitch') =>
+    get<KeyImportDetectResult>('/api/keys/import-local/detect', {client}),
 };
 
 /* ── 红包：批量发放带额度的密钥（见 server/redpacket.py）────
